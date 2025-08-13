@@ -48,6 +48,7 @@ target_link_libraries(READ_GPS_PICO_W
     pico_stdlib
     hardware_i2c
     pico_cyw43_arch_none
+    pico_multicore
 )
 
 # Add the standard include files to the build

@@ -22,13 +22,14 @@ IF you want to assist in development please see the repository at: https://githu
 submit issues, check out the full development of the BillyBot project, and contribute on the GitHub page
 
 Current micro-controller platform is: RaspberryPi PICO W
-this code is adapted from the work of Robert's Scmorgasboard, including NMEA standards and code to utilize it.
+this code is adapted from the work of Robert's Smorgasbord, including NMEA standards and code to utilize it.
 this is the first in a series of videos used here: https://www.youtube.com/watch?v=aLeCaa7TUZA 
 
 
 as of (8/12/2025) this script is a [WIP]work in progress, please be patient as there is still plenty to do
 */
 
+// ---------- Included Libraries ---------- //
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -41,15 +42,20 @@ as of (8/12/2025) this script is a [WIP]work in progress, please be patient as t
 #include <string>
 #include <cstring>
 #include <stdint.h>
+//#include "pico/multicore.h"
+//#include "hardware/irq.h"
+//#include "hardware/adc.h"
+
 
 
 // ---------- debugging and output settings ---------- //
 bool dbug = false;
-bool printraw = true; //if true, print raw nmea lines, if false, print parsed data
+bool printraw = false; //if true, print raw nmea lines, if false, print parsed data
 bool include_sentence_type = true; //if true, print the sentence type, if false, do not print the sentence type
 bool include_address = true; //if true, print the address field, if false, do not print the address field
 bool print_parametric_fields = true; //if true, print the parametric fields, if false, do not print the parametric fields
 
+int counter = 0;
 
 
 // ---------- I2C definition ---------- //
@@ -91,6 +97,18 @@ void blink_toggle(){
 #define TX 4 //for pico use pin 6,7(which are translated to gpio pins 4,5)
 #define RX 5 //these are uart1 enabled pins pins
 
+/*
+// ---------- Multicores ---------- //
+void core1_interrupt_handler() {
+    while(multicore_fifo_rvalid()) { // Check if there is data in the FIFO
+        uint32_t data = multicore_fifo_pop_blocking(); // Pop data from the FIFO
+        if (data == 0xFFFFFFFF) { // Check for termination signal
+            break; // Exit the loop if termination signal is received
+        }
+        printf("Core 1 received: %u\n", data); // Print the received data
+    }
+
+} */
 
 // ---------- Initilization ---------- //
 void initilize(){//call first in main
@@ -209,7 +227,7 @@ enum class NMEA_par_field_type : unsigned int {// to hold the sentence type iden
   //gga = NMEA_sentence_formatter_number("GGA"),    // Global Positioning System Fix Data
     gll = NMEA_sentence_formatter_number("GLL"),    // Geographic Position - Latitude/Longitude
   //gsa = NMEA_sentence_formatter_number("GSA"),    // GNSS DOP and Active Satellites
-  //gsv = NMEA_sentence_formatter_number("GSV"),    // GNSS Satellites in View
+    gsv = NMEA_sentence_formatter_number("GSV"),    // GNSS Satellites in View
   //rmc = NMEA_sentence_formatter_number("RMC"),    // Recommended Minimum Specific GNSS Data
   //vtg = NMEA_sentence_formatter_number("VTG"),    // Course Over Ground and Ground Speed
 
@@ -253,6 +271,20 @@ struct NMEA_par_field_gll {// Geographic Position - Latitude/Longitude
     char                    mode;       // Mode ('A' for autonomous, 'D' for differential, 'E' for estimated, 'N' for not valid)
 };
 
+struct NMEA_par_field_gsv {// GNSS Satellites in View
+    uint8_t sentence_count;     // Number of sentences in the GSV multi message(1-9)
+    uint8_t sentence_number;    // Current sentence number (1-9)
+    uint8_t satellite_count;    // 0-27 (9*4), 0xFF if null(no satellites in view)
+    uint8_t satellites_size;    // 0 -4, valid sats in array
+    struct {
+        uint8_t id;             // Satellite ID (1-32), 0xFF if null
+        uint8_t elevation;      // Elevation in degrees (0-90), 0xFF if null
+        uint16_t azimuth;       // Azimuth in degrees (0-359), 0xFFFF if null
+        uint8_t snr;            // Signal-to-Noise Ratio (0-99 dBHz), 0xFF if null
+    } satellites[4];            // Array of satellites (up to 4 per sentence)
+    char signal_id;             // '0' - 'F', or '\0' of nulled, 127 (DEL) if missing
+};
+
 struct NMEA_par_field {
     NMEA_par_field_type type;   // Type of the parametric field
     union {
@@ -260,7 +292,7 @@ struct NMEA_par_field {
       //NMEA_par_field_gga gga; // Global Positioning System Fix Data
         NMEA_par_field_gll gll; // Geographic Position - Latitude/Longitude
       //NMEA_par_field_gsa gsa; // GNSS DOP and Active Satellites
-      //NMEA_par_field_gsv gsv; // GNSS Satellites in View
+        NMEA_par_field_gsv gsv; // GNSS Satellites in View
       //NMEA_par_field_rmc rmc; // Recommended Minimum Specific GNSS Data
       //NMEA_par_field_vtg vtg; // Course Over Ground and Ground Speed
     };
@@ -472,8 +504,64 @@ void nmea_print_parametric_field_gll(const NMEA_par_field_gll& gll) {
     }
 
     printf("\n");
-    sleep_ms(10);
 
+}
+
+void nmea_print_parametric_field_gsv(const NMEA_par_field_gsv& gsv) {
+    
+    uint8_t sat;
+    char buffer[strlen("[SAT 99: ELV 90°, AZ 359°, SIG 99]_")];
+    
+    sprintf(buffer, "[SAT %1u OF %1u]", gsv.sentence_number, gsv.sentence_count);
+    printf("%s", buffer);
+
+    if (gsv.satellite_count == 0xFF) {
+        printf("[NO SATELLITES IN VIEW]");
+    } else {
+        sprintf(buffer, "[SAT: %02u]", gsv.satellite_count);
+        printf("%s", buffer);
+    }
+
+    for (sat = 0; sat < gsv.satellites_size; sat++){
+        if (gsv.satellites[sat].id == 0xFF){
+            printf("[SAT [NULL]: ");
+        } else {
+            sprintf(buffer, "[SAT %02u: ", gsv.satellites[sat].id);
+            printf("%s", buffer);
+        }
+
+        if (gsv.satellites[sat].elevation == 0xFF){
+            printf("ELV [NULL], ");
+        } else {
+            sprintf(buffer, "ELV %02u, ", gsv.satellites[sat].elevation);
+            printf("%s", buffer);
+        }
+
+        if (gsv.satellites[sat].azimuth == 0xFFFF){
+            printf("AZ [NULL], ");
+        } else {
+            sprintf(buffer, "AZ %02u, ", gsv.satellites[sat].azimuth);
+            printf("%s", buffer);
+        }
+
+        if (gsv.satellites[sat].snr == 0xFF){
+            printf("SNR [NULL]]");
+        } else {
+            sprintf(buffer, "SNR %02u]", gsv.satellites[sat].snr);
+            printf("%s", buffer);
+        }
+
+    }
+    if (gsv.signal_id != 127){
+        printf("[SIG ");
+        if (gsv.signal_id == '\0') {
+            printf("[NULL]");
+        } else {
+            printf("%c", gsv.signal_id);
+        }
+        printf("]");
+    }
+    printf("\n");
 }
 
 void nmea_print_parametric_field(const NMEA_par_field& fields) {
@@ -488,10 +576,15 @@ void nmea_print_parametric_field(const NMEA_par_field& fields) {
             nmea_print_parametric_field_gll(fields.gll);
             break;
 
+        case NMEA_par_field_type::gsv:
+            nmea_print_parametric_field_gsv(fields.gsv);
+            break;
+
         default:
             //printf("[UNKNOWN]");
             break;
     }
+    counter++;
 }
 
 void nmea_print_data_content(const NMEA_data_content& content) {
@@ -713,6 +806,34 @@ NMEA_par_field_gll nmea_dec_par_field_gll(char string[], uint8_t fields) {
     
 } 
 
+NMEA_par_field_gsv nmea_dec_par_field_gsv(char string[], uint8_t fields) {
+    NMEA_par_field_gsv gsv;
+
+    // Decode sentence count and number
+    gsv.sentence_count = atoi(string); // Convert the first part of the string to sentence count
+    string += strlen(string) + 1; // Move to the next part of the string
+    gsv.sentence_number = atoi(string); // Convert the next part of the string to sentence number
+    string += strlen(string) + 1; // Move to the next part of the string
+    gsv.satellites_size = 0; // Initialize the size of the satellites array
+
+    while (fields >= 7){
+        gsv.satellites[gsv.satellites_size].id = strlen(string) == 2 ? atoi(string) : 0xFF; // Convert the satellite ID to integer, or set to 0xFF if null
+        string += strlen(string) + 1; // Move to the next part of the string
+        gsv.satellites[gsv.satellites_size].elevation = strlen(string) == 2 ? atoi(string) : 0xFF; // Convert the elevation to integer, or set to 0xFF if null
+        string += strlen(string) + 1; // Move to the next part of the string
+        gsv.satellites[gsv.satellites_size].azimuth = strlen(string) == 3 ? atoi(string) : 0xFFFF; // Convert the azimuth to integer, or set to 0xFFFF if null
+        string += strlen(string) + 1; // Move to the next part of the string
+        gsv.satellites[gsv.satellites_size].snr = strlen(string) == 2 ? atoi(string) : 0xFF; // Convert the SNR to integer, or set to 0xFF if null
+        string += strlen(string) + 1; // Move to the next part of the string
+        gsv.satellites_size++; // Increment the size of the satellites array
+        fields -= 4; // Decrease the fields count by 4 for each satellite
+    }
+
+    gsv.signal_id = fields > 3 ? string[0] : 127; // Copy the signal ID, or set Delete if missing
+    
+    return gsv; // Return the decoded GSV field
+
+}
 
 NMEA_par_field NMEA_dec_par_field(const char formatter[3], const char characters[], const uint8_t length){// Decode the parametric field based on the formatter and characters
     NMEA_par_field fields;// Declare a NMEA_par_field to hold the decoded fields
@@ -730,6 +851,10 @@ NMEA_par_field NMEA_dec_par_field(const char formatter[3], const char characters
             // Check if the field count is valid for GLL
             fields.type = NMEA_par_field_type::gll;// Set the type to GLL
             fields.gll = nmea_dec_par_field_gll(string, field_count); // Decode GLL field
+            break;
+        case (unsigned int)NMEA_par_field_type::gsv:// GNSS Satellites in View
+            fields.type = NMEA_par_field_type::gsv; // Set the type to GSV
+            fields.gsv = nmea_dec_par_field_gsv(string, field_count); // Decode GSV field
             break;
         default:
             fields.type = NMEA_par_field_type::unknown; // Unknown parametric field type
@@ -778,8 +903,30 @@ NMEA_data_content nmea_decode(const NMEA_sentence& sentence){
 // ---------- Main Program ---------- //
 //plan to put all above into header/library file to make everything more user friendly
 
-int main() {
+/*
+void core1_entry() {
+    multicore_fifo_clear_irq();
+    irq_set_exclusive_handler(SIO_IRQ_PROC1, core1_interrupt_handler);
+    irq_set_enabled(SIO_IRQ_PROC1, true);
+
+    while (true) {
+
+        
+
+
+    }
+}
+*/
+
+int main(void) {
+    // Initialize all the connections to run code
     initilize();
+
+
+    // Run the gps reading on core 1
+    //multicore_launch_core1(core1_entry);
+
+    
 
     bool blink_on_boot = false; // Flag to control LED blinking on boot
     if (blink_on_boot) {
@@ -797,13 +944,22 @@ int main() {
     while (true) {
         blink_toggle();
         NMEA_sentence sentence;
+
         if (gps_listen.sentence_available()) {
             sentence = gps_listen.pull();
         }
 
+        //multicore_fifo_push_blocking(sentence);
+        //sleep_ms(2000);
+
         nmea_print_data_content(nmea_decode(sentence)); // Decode and print the NMEA sentence
         if (printraw) {// If raw printing is enabled, print the raw NMEA sentence
         printf("NMEA: %.*s", sentence.length, sentence.characters);
+        }
+        
+        if (counter == 200) {
+            sleep_ms(3000);
+            counter = 0;
         }
     }
     
