@@ -28,38 +28,38 @@ set(PICO_BOARD pico_w CACHE STRING "Board type")
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(ros_gps_pico_02 C CXX ASM)
+project(READ_GPS_PICO_W C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
-add_executable(ros_gps_pico_02 ros_gps_pico_02.cpp ssd1306.cpp)
+add_executable(READ_GPS_PICO_W READ_GPS_PICO_W.cpp)
 
-pico_set_program_name(ros_gps_pico_02 "ros_gps_pico_02")
-pico_set_program_version(ros_gps_pico_02 "0.1")
+pico_set_program_name(READ_GPS_PICO_W "ros_gps_pico_02")
+pico_set_program_version(READ_GPS_PICO_W "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(ros_gps_pico_02 1)
-pico_enable_stdio_usb(ros_gps_pico_02 1)
+pico_enable_stdio_uart(READ_GPS_PICO_W 1)
+pico_enable_stdio_usb(READ_GPS_PICO_W 1)
 
 # Add the standard library to the build
-target_link_libraries(ros_gps_pico_02 
+target_link_libraries(READ_GPS_PICO_W 
     pico_stdlib
     hardware_i2c
     pico_cyw43_arch_none
 )
 
 # Add the standard include files to the build
-target_include_directories(ros_gps_pico_02 PRIVATE
+target_include_directories(READ_GPS_PICO_W PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
 # Add any user requested libraries
-target_link_libraries(ros_gps_pico_02 
+target_link_libraries(READ_GPS_PICO_W 
         pico_cyw43_arch_none
         )
 
-pico_add_extra_outputs(ros_gps_pico_02)
+pico_add_extra_outputs(READ_GPS_PICO_W)
 
 
